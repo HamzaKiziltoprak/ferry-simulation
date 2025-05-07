@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class FerryController extends Thread {
     private final Semaphore tollSemaphoreA = new Semaphore(2);
     private final Semaphore tollSemaphoreB = new Semaphore(2);
-    private final Semaphore ferrSemaphore = new Semaphore(1);
+    private final Semaphore ferrySemaphore = new Semaphore(1);  // Fixed typo: ferrSemaphore -> ferrySemaphore
 
     private final Queue<Vehicle> ferryQueue = new LinkedList<>();
     private final Queue<Vehicle> waQueueA = new LinkedList<>();
@@ -16,21 +16,31 @@ public class FerryController extends Thread {
     private int currentSide;
 
     private final AtomicInteger completedTrips = new AtomicInteger(0);
+    private final int TOTAL_TRIPS_NEEDED = 30; // 30 vehicles, each needs to make 2 trips
 
     public FerryController() {
         this.currentSide = (int)(Math.random() * 2);
     }
 
-    private void ferryMustDepart() throws InterruptedException {
+    private synchronized void ferryMustDepart() throws InterruptedException {
         Queue<Vehicle> sideQueue = currentSide == 0 ? waQueueA : waQueueB;
 
-        if (!sideQueue.isEmpty() || currentCapacity == FERRY_CAPACITY) {
-            ferrSemaphore.acquire();
+        // Check if we need to depart (queue has vehicles or ferry is full)
+        if (!sideQueue.isEmpty() || currentCapacity > 0) {
+            ferrySemaphore.acquire();
             try {
-                departFerry();
-                dischargeFerry();
+                // Only depart if we have loaded vehicles
+                if (currentCapacity > 0) {
+                    departFerry();
+                    dischargeFerry();
+                }
+                // If all trips are complete, end the simulation
+                if (completedTrips.get() >= TOTAL_TRIPS_NEEDED) {
+                    System.out.println("All vehicles have completed their trips!");
+                    Thread.currentThread().interrupt();
+                }
             } finally {
-                ferrSemaphore.release();
+                ferrySemaphore.release();
             }
         }
     }
@@ -64,9 +74,20 @@ public class FerryController extends Thread {
         }
     }
 
-    public void LoadVehicle(Vehicle vehicle) throws InterruptedException {
-        ferrSemaphore.acquire();
+    public synchronized void LoadVehicle(Vehicle vehicle) throws InterruptedException {
+        // Check if the vehicle is already on the ferry or has completed trips
+        if (ferryQueue.contains(vehicle) || vehicle.getTripCount() >= 2) {
+            return;
+        }
+        
+        ferrySemaphore.acquire();
         try {
+            // Re-check that the vehicle is in the correct waiting queue
+            Queue<Vehicle> waitQueue = vehicle.getSide() == 0 ? waQueueA : waQueueB;
+            if (!waitQueue.contains(vehicle)) {
+                return;
+            }
+            
             if (vehicle.getSide() == currentSide && currentCapacity + vehicle.getSize() <= FERRY_CAPACITY) {
                 System.out.printf("%s is loading on the ferry on side %s (Current cap: %d)\n",
                         vehicle.getVehicleName(), currentSide == 0 ? "A" : "B", currentCapacity);
@@ -75,47 +96,53 @@ public class FerryController extends Thread {
                 currentCapacity += vehicle.getSize();
                 ferryQueue.add(vehicle);
 
-                synchronized (this) {
-                    if (vehicle.getSide() == 0) waQueueA.remove(vehicle);
-                    else waQueueB.remove(vehicle);
-                }
+                // Remove vehicle from waiting queue
+                if (vehicle.getSide() == 0) waQueueA.remove(vehicle);
+                else waQueueB.remove(vehicle);
 
                 System.out.printf("%s has loaded on the ferry on side %s\n",
                         vehicle.getVehicleName(), currentSide == 0 ? "A" : "B");
             }
         } finally {
-            ferrSemaphore.release();
+            ferrySemaphore.release();
         }
     }
 
     private void departFerry() throws InterruptedException {
-        System.out.printf("Ferry is departing from side %s\n", currentSide == 0 ? "A" : "B");
+        System.out.printf("Ferry is departing from side %s with %d vehicles\n", 
+                currentSide == 0 ? "A" : "B", ferryQueue.size());
         Thread.sleep(500);
         this.currentSide = 1 - this.currentSide;
     }
 
-    private void dischargeFerry() throws InterruptedException {
-        Iterator<Vehicle> iterator = ferryQueue.iterator();
-        int dischargedCount = 0;
-
-        while (iterator.hasNext()) {
-            Vehicle vehicle = iterator.next();
-            vehicle.setSide(currentSide);
-            vehicle.incrementTripCount(); // ekledik
-            System.out.printf("%s is discharging to side %s\n", vehicle.getVehicleName(), currentSide == 0 ? "A" : "B");
-            Thread.sleep(1000);
-            currentCapacity -= vehicle.getSize();
-            iterator.remove();
+    private synchronized void dischargeFerry() throws InterruptedException {
+        List<Vehicle> vehiclesToRemove = new ArrayList<>(ferryQueue);
         
-            if (vehicle.getTripCount() < 2) {
-                // Araç karşıya geçince tekrar bekleme kuyruğuna giriyor
+        for (Vehicle vehicle : vehiclesToRemove) {
+            vehicle.setSide(currentSide);
+            vehicle.incrementTripCount();
+            
+            System.out.printf("%s is discharging to side %s (Trip count: %d)\n", 
+                    vehicle.getVehicleName(), currentSide == 0 ? "A" : "B", vehicle.getTripCount());
+            Thread.sleep(500);  // Reduced discharge time for faster simulation
+            currentCapacity -= vehicle.getSize();
+            ferryQueue.remove(vehicle);
+            
+            // Check if vehicle has completed all trips
+            if (vehicle.getTripCount() >= 2) {
+                int completed = completedTrips.incrementAndGet();
+                System.out.printf("%s has completed all trips! (%d/%d vehicles done)\n", 
+                        vehicle.getVehicleName(), completed, TOTAL_TRIPS_NEEDED);
+            } else {
+                // Add to waiting queue on new side
                 if (currentSide == 0) waQueueA.add(vehicle);
                 else waQueueB.add(vehicle);
-            } else {
-                completedTrips.incrementAndGet(); // İşini bitirdiyse sayaç artıyor
+                System.out.printf("%s is now waiting on side %s for next trip\n", 
+                        vehicle.getVehicleName(), currentSide == 0 ? "A" : "B");
             }
         }
-        System.out.printf("Tamamlanan araçlar: %d/30\n", completedTrips.get());
         
+        System.out.printf("All vehicles discharged. Completed vehicles: %d/%d\n", 
+                completedTrips.get(), TOTAL_TRIPS_NEEDED);
     }
 }
