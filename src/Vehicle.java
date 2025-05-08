@@ -4,6 +4,7 @@ abstract public class Vehicle extends Thread {
     private String name;
     private int tripCount = 0;
     private FerryController controller;
+    private boolean hasPaidToll = false; // Gişe ödemesi için yeni değişken
     
     public Vehicle(int size, String name, FerryController controller) {
         this.size = size;
@@ -21,7 +22,11 @@ abstract public class Vehicle extends Thread {
                     break;
                 }
                 
-                controller.ProcessToll(this);
+                // Bu tarafta henüz ödeme yapılmadıysa gişeden geç
+                if (!hasPaidToll) {
+                    controller.ProcessToll(this);
+                }
+                
                 controller.LoadVehicle(this);
                 
                 // Wait a bit before trying again if we haven't been loaded
@@ -38,6 +43,15 @@ abstract public class Vehicle extends Thread {
     public int getSize() { return size; }
     public String getVehicleName() { return name; }
     public void setSide(int side) { this.side = side; }
+    
+    // Yeni getter ve setter metodları
+    public boolean hasPaidToll() {
+        return hasPaidToll;
+    }
+    
+    public void setHasPaidToll(boolean hasPaidToll) {
+        this.hasPaidToll = hasPaidToll;
+    }
     
     public synchronized int getTripCount() {
         return tripCount;
