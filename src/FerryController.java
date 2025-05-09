@@ -5,7 +5,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class FerryController extends Thread {
     private final Semaphore tollSemaphoreA = new Semaphore(2);
     private final Semaphore tollSemaphoreB = new Semaphore(2);
-    private final Semaphore ferrySemaphore = new Semaphore(1);
+    private final Semaphore ferrSemaphore = new Semaphore(1);
 
     private final Queue<Vehicle> ferryQueue = new LinkedList<>();
     private final Queue<Vehicle> waQueueA = new LinkedList<>();
@@ -16,65 +16,45 @@ public class FerryController extends Thread {
     private int currentSide;
 
     private final AtomicInteger completedTrips = new AtomicInteger(0);
-    private final int TOTAL_TRIPS_NEEDED = 30; // 30 vehicles, each needs to make 2 trips
-    
-    // Simülasyon zaman takibi için başlangıç zamanı
-    private final long startTime = System.currentTimeMillis();
-    
+
     public FerryController() {
         this.currentSide = (int)(Math.random() * 2);
     }
-    
-    // Geçen süreyi saniye cinsinden hesaplayan yardımcı metot
-    private double getElapsedTimeInSeconds() {
-        return (System.currentTimeMillis() - startTime) / 1000.0;
+
+    private void ferryMustDepart() throws InterruptedException {
+        Queue<Vehicle> sideQueue = currentSide == 0 ? waQueueA : waQueueB;
+
+        if (!sideQueue.isEmpty() || currentCapacity == FERRY_CAPACITY) {
+            ferrSemaphore.acquire();
+            try {
+                departFerry();
+                dischargeFerry();
+            } finally {
+                ferrSemaphore.release();
+            }
+        }
     }
 
     @Override
     public void run() {
-        try {
-            while (!Thread.currentThread().isInterrupted()) {
-                // Ferry işleme döngüsü
-                Thread.sleep(2000);  // Feribot yolculuk süresi
-
-                // Ferry'yi boşalt
-                dischargeFerry();
-                
-                // Ferry'yi doldurmak için zaman ver (maksimum 10 saniye)
-                Thread.sleep(10000);
-                
-                // Ferry'yi hareket ettir
-                departFerry();
+        while (!Thread.interrupted()) {
+            try {
+                ferryMustDepart();
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                break;
             }
-        } catch (InterruptedException e) {
-            System.out.println("Ferry controller interrupted! [" + getElapsedTimeInSeconds() + "s]");
-            Thread.currentThread().interrupt();
         }
     }
 
     public void ProcessToll(Vehicle vehicle) throws InterruptedException {
-        // Araç zaten feribotta veya gişeyi geçmişse atlayın
-        if(ferryQueue.contains(vehicle) || vehicle.hasPaidToll()) {
-            return;
-        }
-        
         Semaphore lock = vehicle.getSide() == 0 ? tollSemaphoreA : tollSemaphoreB;
         lock.acquire();
         try {
-            System.out.printf("%s is waiting for the toll on side %s [%.1fs]\n", 
-                vehicle.getVehicleName(), 
-                vehicle.getSide() == 0 ? "A" : "B", 
-                getElapsedTimeInSeconds());
-                
+            System.out.printf("%s is waiting for the toll on side %s\n", vehicle.getVehicleName(), vehicle.getSide() == 0 ? "A" : "B");
             Thread.sleep((int)(Math.random() * 1000));
-            
-            System.out.printf("%s has paid the toll on side %s [%.1fs]\n", 
-                vehicle.getVehicleName(), 
-                vehicle.getSide() == 0 ? "A" : "B", 
-                getElapsedTimeInSeconds());
-            
-            vehicle.setHasPaidToll(true);  // Bu aracın gişeyi geçtiğini işaretle
-            
+            System.out.printf("%s has paid the toll on side %s\n", vehicle.getVehicleName(), vehicle.getSide() == 0 ? "A" : "B");
+
             synchronized (this) {
                 if (vehicle.getSide() == 0) waQueueA.add(vehicle);
                 else waQueueB.add(vehicle);
@@ -84,111 +64,58 @@ public class FerryController extends Thread {
         }
     }
 
-    public synchronized void LoadVehicle(Vehicle vehicle) throws InterruptedException {
-        // Araç zaten feribotta mı kontrol et
-        if (ferryQueue.contains(vehicle)) {
-            return;
-        }
-        
-        // Araç doğru tarafta mı ve feribota binmek için gişeyi geçmiş mi?
-        if (vehicle.getSide() != currentSide || !vehicle.hasPaidToll()) {
-            return;
-        }
-        
-        ferrySemaphore.acquire();
+    public void LoadVehicle(Vehicle vehicle) throws InterruptedException {
+        ferrSemaphore.acquire();
         try {
-            // Feribot hala kapasitesi dahilinde mi?
             if (vehicle.getSide() == currentSide && currentCapacity + vehicle.getSize() <= FERRY_CAPACITY) {
-                System.out.printf("%s is loading on the ferry on side %s (Current cap: %d) [%.1fs]\n",
-                        vehicle.getVehicleName(), 
-                        currentSide == 0 ? "A" : "B", 
-                        currentCapacity,
-                        getElapsedTimeInSeconds());
+                System.out.printf("%s is loading on the ferry on side %s (Current cap: %d)\n",
+                        vehicle.getVehicleName(), currentSide == 0 ? "A" : "B", currentCapacity);
 
                 Thread.sleep((int)(Math.random() * 1000 * vehicle.getSize()));
                 currentCapacity += vehicle.getSize();
                 ferryQueue.add(vehicle);
 
-                // Araçları bekleme kuyruğundan çıkar
-                if (vehicle.getSide() == 0) waQueueA.remove(vehicle);
-                else waQueueB.remove(vehicle);
+                synchronized (this) {
+                    if (vehicle.getSide() == 0) waQueueA.remove(vehicle);
+                    else waQueueB.remove(vehicle);
+                }
 
-                System.out.printf("%s has loaded on the ferry on side %s [%.1fs]\n",
-                        vehicle.getVehicleName(), 
-                        currentSide == 0 ? "A" : "B",
-                        getElapsedTimeInSeconds());
+                System.out.printf("%s has loaded on the ferry on side %s\n",
+                        vehicle.getVehicleName(), currentSide == 0 ? "A" : "B");
             }
         } finally {
-            ferrySemaphore.release();
+            ferrSemaphore.release();
         }
     }
 
     private void departFerry() throws InterruptedException {
-        // Eğer feribotta hiç araç yoksa hareket etme
-        if (ferryQueue.isEmpty()) {
-            System.out.printf("Ferry is empty, waiting for vehicles on side %s [%.1fs]\n", 
-                    currentSide == 0 ? "A" : "B", 
-                    getElapsedTimeInSeconds());
-            return;
-        }
-        
-        // Kapasite kullanım yüzdesini hesapla
-        double capacityPercentage = (currentCapacity * 100.0) / FERRY_CAPACITY;
-        
-        System.out.printf("Ferry is departing from side %s with %d vehicles (Capacity: %d/%d units, %.1f%% full) [%.1fs]\n", 
-                currentSide == 0 ? "A" : "B", 
-                ferryQueue.size(),
-                currentCapacity, 
-                FERRY_CAPACITY,
-                capacityPercentage,
-                getElapsedTimeInSeconds());
-                
+        System.out.printf("Ferry is departing from side %s\n", currentSide == 0 ? "A" : "B");
         Thread.sleep(500);
         this.currentSide = 1 - this.currentSide;
-        
-        System.out.printf("Ferry is now traveling [%.1fs]\n", getElapsedTimeInSeconds());
     }
 
-    private synchronized void dischargeFerry() throws InterruptedException {
-        List<Vehicle> vehiclesToRemove = new ArrayList<>(ferryQueue);
-        
-        System.out.printf("Ferry has arrived at side %s [%.1fs]\n", 
-                currentSide == 0 ? "A" : "B",
-                getElapsedTimeInSeconds());
-        
-        for (Vehicle vehicle : vehiclesToRemove) {
+    private void dischargeFerry() throws InterruptedException {
+        Iterator<Vehicle> iterator = ferryQueue.iterator();
+        int dischargedCount = 0;
+
+        while (iterator.hasNext()) {
+            Vehicle vehicle = iterator.next();
             vehicle.setSide(currentSide);
-            vehicle.incrementTripCount();
-            vehicle.setHasPaidToll(false);  // Yeni tarafta gişe ödeme durumunu sıfırla
-            
-            System.out.printf("%s is discharging to side %s (Trip count: %d) [%.1fs]\n", 
-                    vehicle.getVehicleName(), 
-                    currentSide == 0 ? "A" : "B", 
-                    vehicle.getTripCount(),
-                    getElapsedTimeInSeconds());
-                    
-            Thread.sleep(500);
+            vehicle.incrementTripCount(); // ekledik
+            System.out.printf("%s is discharging to side %s\n", vehicle.getVehicleName(), currentSide == 0 ? "A" : "B");
+            Thread.sleep(1000);
             currentCapacity -= vehicle.getSize();
-            ferryQueue.remove(vehicle);
-            
-            if (vehicle.getTripCount() >= 2) {
-                int completed = completedTrips.incrementAndGet();
-                System.out.printf("%s has completed all trips! (%d/%d vehicles done) [%.1fs]\n", 
-                        vehicle.getVehicleName(), 
-                        completed, 
-                        TOTAL_TRIPS_NEEDED,
-                        getElapsedTimeInSeconds());
+            iterator.remove();
+        
+            if (vehicle.getTripCount() < 2) {
+                // Araç karşıya geçince tekrar bekleme kuyruğuna giriyor
+                if (currentSide == 0) waQueueA.add(vehicle);
+                else waQueueB.add(vehicle);
             } else {
-                System.out.printf("%s is now on side %s and needs to go through toll again [%.1fs]\n", 
-                        vehicle.getVehicleName(), 
-                        currentSide == 0 ? "A" : "B",
-                        getElapsedTimeInSeconds());
+                completedTrips.incrementAndGet(); // İşini bitirdiyse sayaç artıyor
             }
         }
+        System.out.printf("Tamamlanan araçlar: %d/30\n", completedTrips.get());
         
-        System.out.printf("All vehicles discharged. Completed vehicles: %d/%d [%.1fs]\n", 
-                completedTrips.get(), 
-                TOTAL_TRIPS_NEEDED,
-                getElapsedTimeInSeconds());
     }
 }
