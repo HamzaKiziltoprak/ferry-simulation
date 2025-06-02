@@ -89,14 +89,14 @@ public synchronized void LoadVehicle(Vehicle vehicle) throws InterruptedExceptio
         return;
     }
 
-    // İlk kontrol - feribot transit durumundaysa veya araç uygun değilse yükleme yapma
+    // First check - if the ferry is in transit or the vehicle is not eligible, do not load
     if (vehicle.getSide() != currentSide || !vehicle.hasPaidToll() || isInTransit) {
         return;
     }
     
     ferrySemaphore.acquire();
     try {
-        // Transit durumunu ve diğer koşulları tekrar kontrol et
+        // Re-check transit status and other conditions
         if (!isInTransit && vehicle.getSide() == currentSide && currentCapacity + vehicle.getSize() <= FERRY_CAPACITY) {
             System.out.printf("%s is loading on the ferry on side %s (Current cap: %d) [%.1fs]\n",
                     vehicle.getVehicleName(), 
@@ -122,7 +122,7 @@ public synchronized void LoadVehicle(Vehicle vehicle) throws InterruptedExceptio
 }
     //Method for the ferry depart this method controls if ferry is empty it can't move until least a car load to the ferry
 private void departFerry() throws InterruptedException {
-    // Feribot hareket etmeden önce semafor al
+    // Acquire semaphore before the ferry moves
     ferrySemaphore.acquire();
     try {
         if (ferryQueue.isEmpty()) {
@@ -132,7 +132,7 @@ private void departFerry() throws InterruptedException {
             return;
         }
 
-        // Transit durumunu güvenli şekilde ayarla
+        // Set transit status safely
         isInTransit = true;
         
         double capacityPercentage = (currentCapacity * 100.0) / FERRY_CAPACITY;
